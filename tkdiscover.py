@@ -17,6 +17,7 @@ import io
 import re
 import os
 import pickle
+import tempfile
 import threading
 import tkinter
 from tkinter import messagebox
@@ -28,6 +29,7 @@ from astropy import time
 from astropy import units as u
 
 from pyvo import discover
+from pyvo import samp
 
 
 DEFAULT_SPACE = "274.6880, -13.7920 1"
@@ -401,6 +403,8 @@ class TkDiscoverer(tkinter.Tk):
             ttk.Button(buttonbar, text="Stop", command=self._stop),
             True).pack(side=tkinter.LEFT)
         ttk.Button(buttonbar,
+            text="Broadcast", command=self._broadcast).pack(side=tkinter.LEFT)
+        ttk.Button(buttonbar,
             text="Save", command=self._save).pack(side=tkinter.LEFT)
         self._make_thread_sensitive(
             ttk.Button(buttonbar, text="Quit", command=self.quit),
@@ -587,7 +591,17 @@ class TkDiscoverer(tkinter.Tk):
 
     def _get_current_votable(self):
         """returns bytes for a VOTable of the current results.
+
+        This returns does some user interaction and returns None when
+        there are no results yet.  That's lazy and probably should
+        be changed.
         """
+        if self.disco is None:
+            messagebox.showerror(
+                "Tkdiscover Error",
+                "No results so far (try Run?)")
+            return
+
         # Copy these things more or less simultaneously because we
         # may still be querying.  We *should* use a lock here, really.
         results = self.disco.results[:]
@@ -636,15 +650,58 @@ class TkDiscoverer(tkinter.Tk):
     def _save(self):
         """UI callback: save the current results.
         """
-        if self.disco is None:
-            messagebox.showerror(
-                "Tkdiscover Error",
-                "No results so far (try Run?)")
-            return
-
         vot = self._get_current_votable()
-        with open(self.destname_tk.get(), "wb") as f:
-            f.write(vot)
+        if vot:
+            with open(self.destname_tk.get(), "wb") as f:
+                f.write(vot)
+
+    def _broadcast_samp(self, serialised_data):
+        """does a samp broadcast of serialised_data on a connection
+        of its own.
+
+        In the context of tkdiscover, this is running in a dedicated
+        thread that terminates when the transmission is done.
+        """
+        # TODO: Errors in here are basically ignored (well, you'll
+        # see tracebacks on the console.  To change this, we'd probably
+        # have to re-use the threadwatcher queue; but that would then
+        # have to be examined all the time.
+        handle, f_name = tempfile.mkstemp(suffix=".xml")
+        with open(handle, "wb") as f:
+            f.write(serialised_data)
+
+        try:
+            with samp.connection(
+                    client_name="tkdiscover",
+                    description="PyVO global dataset discovery") as conn:
+                message = {
+                    "samp.mtype": "table.load.votable",
+                    "samp.params": {
+                        "url": "file://"+f_name,
+                        "name": "tkdiscover current result",
+                    },
+                }
+                for client_id in conn.get_registered_clients():
+                    conn.call_and_wait(client_id, message, "10")
+        finally:
+            os.unlink(f_name)
+
+    def _broadcast(self):
+        """UI callback: SAMP-broadcast the current results
+        """
+        vot = self._get_current_votable()
+        if vot:
+            samp_thread = threading.Thread(
+                target=lambda: self._broadcast_samp(vot))
+            samp_thread.start()
+
+            def harvest_thread():
+                if samp_thread.is_alive():
+                    self.after(1000, harvest_thread)
+                else:
+                    samp_thread.join()
+
+            self.after(1000, harvest_thread)
 
 
 def parse_command_line():
