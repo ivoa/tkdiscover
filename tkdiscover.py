@@ -577,6 +577,7 @@ class TkDiscoverer(tkinter.Tk):
 
         self.disco = discover.ImageDiscoverer(
             **dict(constraints),
+            inclusive=self.inclusive_tk.get(),
             watcher=self._update_status)
         if self.debugging and os.path.exists(DEBUG_PICKLES[0]):
             with open(DEBUG_PICKLES[0], "rb") as f:
