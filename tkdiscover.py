@@ -309,7 +309,14 @@ OBSCORE_METADATA = \
   'name': 'em_ucd',
   'ucd': 'meta.ucd',
   'utype': 'obscore:Char.SpectralAxis.ucd',
-  'xtype': None}]
+  'xtype': None},
+ {'arraysize': '*',
+  'datatype': 'char',
+  'description': "IVOID of the originating service",
+  'name': 'origin_service',
+  'ucd': 'meta.ref.ivoid',
+  'utype': None,
+  'xtype': None},]
 
 
 class InputSyntaxError(Exception):
@@ -551,6 +558,9 @@ class TkDiscoverer(tkinter.Tk):
 
     def _stop(self):
         self.disco.reset_services()
+        if self.thread:
+            self._update_status(
+                "Please wait for the last service to complete")
 
     ################# discovery and results management
 
@@ -631,6 +641,7 @@ class TkDiscoverer(tkinter.Tk):
         resource.tables.append(table)
 
         for meta in OBSCORE_METADATA:
+            meta = meta.copy()  # so we can pop the description
             description = meta.pop("description")
             field = V.Field(vot, **meta)
             field.description = description
@@ -638,7 +649,7 @@ class TkDiscoverer(tkinter.Tk):
 
         field_sequence = [m["name"] for m in OBSCORE_METADATA]
         def make_record(imageFound):
-            return tuple(getattr(imageFound, n) for n in field_sequence)
+            return tuple(getattr(imageFound, n, None) for n in field_sequence)
 
         table.create_arrays(len(results))
         for index, row in enumerate(results):

@@ -34,5 +34,15 @@ for col in api.getRD("//obscore").getById("ObsCore"):
        "datatype": vot_type,
        "arraysize": vot_arraysize,
        "xtype": vot_xtype,})
+
+metadata.append(
+    {'arraysize': '*',
+      'datatype': 'char',
+      'description': "IVOID of the originating service",
+      'name': 'origin_service',
+      'ucd': 'meta.ref.ivoid',
+      'utype': None,
+      'xtype': None})
+
 print("OBSCORE_METADATA = \\")
 pprint.pprint(metadata)
