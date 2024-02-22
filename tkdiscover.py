@@ -17,6 +17,7 @@ import io
 import re
 import os
 import pickle
+import sys
 import tempfile
 import threading
 import tkinter
@@ -42,12 +43,22 @@ DATE_RE = r"\d\d\d\d-\d\d-\d\d"
 
 DEBUG_PICKLES = ("last_results.pickle", "last_logs.pickle")
 
+# this a map from VOTable datatypes to ignored standin values
+# in case something is None.  Since we're writing binary2 with its
+# safe NULLs, this shouldn't matter.  We should really fix astropy
+# to translate None-s in their arrays to None automatically.
+VOT_NULL_STANDIN = {
+    "long": -9999,
+    "int": -9999,
+    "short": -9999,
+    "double": float("NaN"),
+    "float": float("NaN"),
+    "char": " "}
 
 # The following metadata is generated from DaCHS //obscore RD
 # using the extract_obscore_metadata script in the distribution.
 # To regenerate it, have DaCHS installed, go to the line with the
 # assignment and on an ex commandline say:
-# .,/^$/!python extract_obscore_metadata.py
 OBSCORE_METADATA = \
 [{'arraysize': '*',
   'datatype': 'char',
@@ -68,6 +79,7 @@ OBSCORE_METADATA = \
   'datatype': 'short',
   'description': 'Amount of data processing that has been applied to the data',
   'name': 'calib_level',
+  'null': -9999,
   'ucd': 'meta.code;obs.calib',
   'utype': 'obscore:obsdataset.caliblevel',
   'xtype': None},
@@ -125,6 +137,7 @@ OBSCORE_METADATA = \
   'datatype': 'long',
   'description': 'Estimated size of data product',
   'name': 'access_estsize',
+  'null': -9999,
   'ucd': 'phys.size;meta.file',
   'utype': 'obscore:access.size',
   'xtype': None},
@@ -260,6 +273,7 @@ OBSCORE_METADATA = \
   'description': 'Number of elements (typically pixels) along the first '
                  'spatial axis.',
   'name': 's_xel1',
+  'null': -9999,
   'ucd': 'meta.number',
   'utype': 'obscore:Char.SpatialAxis.numBins1',
   'xtype': None},
@@ -268,6 +282,7 @@ OBSCORE_METADATA = \
   'description': 'Number of elements (typically pixels) along the second '
                  'spatial axis.',
   'name': 's_xel2',
+  'null': -9999,
   'ucd': 'meta.number',
   'utype': 'obscore:Char.SpatialAxis.numBins2',
   'xtype': None},
@@ -275,6 +290,7 @@ OBSCORE_METADATA = \
   'datatype': 'long',
   'description': 'Number of elements (typically pixels) along the time axis.',
   'name': 't_xel',
+  'null': -9999,
   'ucd': 'meta.number',
   'utype': 'obscore:Char.TimeAxis.numBins',
   'xtype': None},
@@ -283,6 +299,7 @@ OBSCORE_METADATA = \
   'description': 'Number of elements (typically pixels) along the spectral '
                  'axis.',
   'name': 'em_xel',
+  'null': -9999,
   'ucd': 'meta.number',
   'utype': 'obscore:Char.SpectralAxis.numBins',
   'xtype': None},
@@ -291,6 +308,7 @@ OBSCORE_METADATA = \
   'description': 'Number of elements (typically pixels) along the polarization '
                  'axis.',
   'name': 'pol_xel',
+  'null': -9999,
   'ucd': 'meta.number',
   'utype': 'obscore:Char.PolarizationAxis.numBins',
   'xtype': None},
@@ -312,12 +330,11 @@ OBSCORE_METADATA = \
   'xtype': None},
  {'arraysize': '*',
   'datatype': 'char',
-  'description': "IVOID of the originating service",
+  'description': 'IVOID of the originating service',
   'name': 'origin_service',
   'ucd': 'meta.ref.ivoid',
   'utype': None,
-  'xtype': None},]
-
+  'xtype': None}]
 
 class InputSyntaxError(Exception):
     """raised when we cannot parse a constraint.
@@ -562,6 +579,14 @@ class TkDiscoverer(tkinter.Tk):
             self._update_status(
                 "Please wait for the last service to complete")
 
+    def _queue_message(self, msg):
+        """queues a status bar message.
+
+        This is so the subordinate thread can communicate with the
+        front end.
+        """
+        self._message_queue.put(msg)
+
     ################# discovery and results management
 
     def _start_thread(self):
@@ -588,7 +613,7 @@ class TkDiscoverer(tkinter.Tk):
         self.disco = discover.ImageDiscoverer(
             **dict(constraints),
             inclusive=self.inclusive_tk.get(),
-            watcher=self._update_status)
+            watcher=self._queue_message)
         if self.debugging and os.path.exists(DEBUG_PICKLES[0]):
             with open(DEBUG_PICKLES[0], "rb") as f:
                 self.disco.results = pickle.load(f)
@@ -643,17 +668,38 @@ class TkDiscoverer(tkinter.Tk):
         for meta in OBSCORE_METADATA:
             meta = meta.copy()  # so we can pop the description
             description = meta.pop("description")
+            null = meta.pop("null", None)
+
             field = V.Field(vot, **meta)
             field.description = description
+            if null is not None:
+                field.values = V.Values(votable, field, null=null)
+
             table.fields.append(field)
 
-        field_sequence = [m["name"] for m in OBSCORE_METADATA]
         def make_record(imageFound):
-            return tuple(getattr(imageFound, n, None) for n in field_sequence)
+            values, mask = [], []
+            for meta in OBSCORE_METADATA:
+                val = getattr(imageFound, meta["name"], None)
+                if val is None:
+                    values.append(VOT_NULL_STANDIN[meta["datatype"]])
+                    mask.append(True)
+                else:
+                    values.append(val)
+                    mask.append(False)
+
+            return tuple(values), tuple(mask)
 
         table.create_arrays(len(results))
         for index, row in enumerate(results):
-            table.array[index] = make_record(row)
+            try:
+                serialised, mask = make_record(row)
+                table.array[index] = serialised
+                table.array.mask[index] = mask
+            except Exception as exc:
+                import pdb;pdb.set_trace()
+                sys.stderr.write(
+                    f"Cannot serialise a row ({exc}): {serialised}\n")
 
         dest = io.BytesIO()
         votable.writeto(vot, dest, "binary2")
@@ -690,7 +736,7 @@ class TkDiscoverer(tkinter.Tk):
         thread that terminates when the transmission is done.
         """
         # TODO: Errors in here are basically ignored (well, you'll
-        # see tracebacks on the console.  To change this, we'd probably
+        # see tracebacks on the console).  To change this, we'd probably
         # have to re-use the threadwatcher queue; but that would then
         # have to be examined all the time.
         handle, f_name = tempfile.mkstemp(suffix=".xml")

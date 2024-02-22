@@ -35,6 +35,10 @@ for col in api.getRD("//obscore").getById("ObsCore"):
        "arraysize": vot_arraysize,
        "xtype": vot_xtype,})
 
+    # Workaround for astropy bug #16090
+    if vot_type in ("int", "short", "long"):
+        metadata[-1]["null"] = -9999
+
 metadata.append(
     {'arraysize': '*',
       'datatype': 'char',
