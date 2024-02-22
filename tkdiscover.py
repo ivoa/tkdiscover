@@ -667,6 +667,21 @@ class TkDiscoverer(tkinter.Tk):
             with open(self.destname_tk.get(), "wb") as f:
                 f.write(vot)
 
+    def _send_to_samp_client(self, conn, client_id, message):
+        """sends a SAMP message to client_id via the SAMP connection
+        conn.
+
+        This is purely a helper for _broadcast_samp.
+        """
+        try:
+            conn.call_and_wait(client_id, message, "10")
+        except Exception:
+            # we don't want to crash on a misbehaved thing
+            # on the SAMP bus; I don't think the user
+            # should even learn of any trouble.  But we don't want
+            # to entirely silent, either, so, for now:
+            import traceback; traceback.print_exc()
+
     def _broadcast_samp(self, serialised_data):
         """does a samp broadcast of serialised_data on a connection
         of its own.
@@ -693,8 +708,10 @@ class TkDiscoverer(tkinter.Tk):
                         "name": "tkdiscover current result",
                     },
                 }
-                for client_id in conn.get_registered_clients():
-                    conn.call_and_wait(client_id, message, "10")
+                for client_id in conn.get_subscribed_clients(
+                        "table.load.votable"):
+                    self._send_to_samp_client(
+                        conn, client_id, message)
         finally:
             os.unlink(f_name)
 
