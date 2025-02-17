@@ -336,6 +336,7 @@ OBSCORE_METADATA = \
   'utype': None,
   'xtype': None}]
 
+
 class InputSyntaxError(Exception):
     """raised when we cannot parse a constraint.
     """
@@ -457,7 +458,8 @@ class TkDiscoverer(tkinter.Tk):
 
     def _update_service_counter(self):
         self.counter_label.configure(
-            text="{}/{}/{}".format(*self.disco.get_query_stats()))
+            text="{}/{}/{}".format(*self.disco.get_query_stats())
+            +": {}".format(len(self.disco.results)))
 
     ################## Parsing and UI
 
